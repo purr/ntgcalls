@@ -7,18 +7,24 @@
 #include <rtc_base/logging.h>
 
 namespace ntgcalls {
-    AudioReceiver::AudioReceiver() {
-        resampler = std::make_unique<webrtc::Resampler>();
-    }
+    AudioReceiver::AudioReceiver() = default;
 
     AudioReceiver::~AudioReceiver() {
         std::lock_guard lock(mutex);
         sink = nullptr;
-        resampler = nullptr;
+        resamplers.clear();
         framesCallback = nullptr;
     }
 
-    bytes::unique_binary AudioReceiver::resampleFrame(bytes::unique_binary data, const size_t size, const uint8_t channels, const uint16_t sampleRate) {
+    webrtc::Resampler* AudioReceiver::resamplerFor(const uint32_t ssrc) {
+        auto& slot = resamplers[ssrc];
+        if (!slot) {
+            slot = std::make_unique<webrtc::Resampler>();
+        }
+        return slot.get();
+    }
+
+    bytes::unique_binary AudioReceiver::resampleFrame(bytes::unique_binary data, const size_t size, const uint8_t channels, const uint16_t sampleRate, const uint32_t ssrc) {
         bytes::unique_binary convertedData;
         size_t preSampleSize;
         if (channels != description->channelCount) {
@@ -42,6 +48,7 @@ namespace ntgcalls {
         if (description->sampleRate == sampleRate) {
             memcpy(newFrame.get(), convertedData.get(), preSampleSize);
         } else {
+            const auto resampler = resamplerFor(ssrc);
             resampler->ResetIfNeeded(sampleRate, static_cast<int>(description->sampleRate), description->channelCount);
             size_t newFrameSize = 0;
             const auto resampled = resampler->Push(
@@ -107,7 +114,8 @@ namespace ntgcalls {
                                 std::move(data),
                                 frame->size,
                                 frame->channels,
-                                frame->sampleRate
+                                frame->sampleRate,
+                                frame->ssrc
                             ),
                             frameSize()
                         }
