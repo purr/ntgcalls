@@ -5,7 +5,10 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <memory>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 #include <functional>
 #include <wrtc/models/audio_frame.hpp>
@@ -15,7 +18,15 @@ namespace wrtc {
 
     class RemoteAudioSink final: public RemoteMediaInterface, public std::enable_shared_from_this<RemoteAudioSink> {
         std::atomic<uint32_t> numSources;
-        std::vector<std::unique_ptr<AudioFrame>> audioFrames;
+        std::mutex mutex;
+        // Latest frame per SSRC. The previous design used an append-only vector
+        // gated on (size >= numSources); when numSources drifted high (e.g. an
+        // audio channel was evicted past the 10-channel cap without paired
+        // removeSource()) the gate accumulated multiple ticks of frames and
+        // mixed them at one go, halving the effective playback rate for the
+        // affected sources (audible as half-pitch / "deep" voice).
+        std::unordered_map<uint32_t, std::unique_ptr<AudioFrame>> latestBySsrc;
+        std::chrono::steady_clock::time_point lastIngest;
         std::function<void(const std::vector<std::unique_ptr<AudioFrame>>&)> framesCallback;
 
     public:

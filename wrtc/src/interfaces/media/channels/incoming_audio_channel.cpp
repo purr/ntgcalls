@@ -36,16 +36,26 @@ namespace wrtc {
         networkThread->BlockingCall([&] {
            channel->SetRtpTransport(rtpTransport);
         });
+        // Prefer Opus over any other PT the server may list — first-PT-wins could otherwise pick a comfort-noise / DTMF entry and skew clockrate.
         std::vector<webrtc::Codec> codecs;
-        for (const auto &[id, name, clockrate, channels, feedbackTypes, parameters] : mediaContent.payloadTypes) {
-            webrtc::Codec codec = webrtc::CreateAudioCodec(static_cast<int>(id), name, static_cast<int>(clockrate), channels);
+        const ::wrtc::PayloadType* selected = nullptr;
+        for (const auto& pt : mediaContent.payloadTypes) {
+            if (pt.name == "opus" || pt.name == "OPUS") {
+                selected = &pt;
+                break;
+            }
+        }
+        if (!selected && !mediaContent.payloadTypes.empty()) {
+            selected = &mediaContent.payloadTypes.front();
+        }
+        if (selected) {
+            webrtc::Codec codec = webrtc::CreateAudioCodec(static_cast<int>(selected->id), selected->name, static_cast<int>(selected->clockrate), selected->channels);
             codec.SetParam(webrtc::kCodecParamUseInbandFec, 1);
             codec.SetParam(webrtc::kCodecParamPTime, 60);
-            for (const auto &[type, subtype] : feedbackTypes) {
+            for (const auto &[type, subtype] : selected->feedbackTypes) {
                 codec.AddFeedbackParam(webrtc::FeedbackParam(type, subtype));
             }
             codecs.push_back(std::move(codec));
-            break;
         }
 
         const auto outgoingDescription = std::make_unique<webrtc::AudioContentDescription>();

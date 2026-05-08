@@ -13,8 +13,8 @@ namespace wrtc {
     void RawAudioSink::OnData(const Data& audio) {
         if (callbackData) {
             auto frame = std::make_unique<AudioFrame>(ssrc);
-            frame->size = audio.samples_per_channel * audio.channels * sizeof(int16_t);
-            frame->data = audio.data;
+            // audio.data is owned by libwebrtc and reused on next tick; copy now.
+            frame->setData(audio.data, audio.samples_per_channel * audio.channels * sizeof(int16_t));
             frame->sampleRate = audio.sample_rate;
             frame->channels = audio.channels;
             callbackData(std::move(frame));

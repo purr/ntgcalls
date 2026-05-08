@@ -261,8 +261,7 @@ namespace wrtc {
                         auto frame = std::make_unique<AudioFrame>(buffer->ssrc);
                         frame->channels = buffer->channels;
                         frame->sampleRate = static_cast<int>(buffer->sampleRate);
-                        frame->data = buffer->data.data();
-                        frame->size = buffer->data.size() * sizeof(int16_t);
+                        frame->setData(buffer->data.data(), buffer->data.size() * sizeof(int16_t));
                         strong->audioFrameCallback(std::move(frame));
                     }
                 }

@@ -192,13 +192,17 @@ namespace wrtc {
     }
 
     void NativeNetworkInterface::removeIncomingAudio(const std::string& endpoint) {
-        if (!pendingContent.contains(endpoint)) {
+        // addSource() pairs with the channel, not pendingContent (which can be skipped past the 10-channel cap) — leaks here drift numSources and corrupt RemoteAudioSink's flush threshold.
+        const bool hadChannel = incomingAudioChannels.contains(endpoint);
+        if (!hadChannel && !pendingContent.contains(endpoint)) {
             return;
         }
         RTC_LOG(LS_INFO) << "Removing incoming audio channel with ssrc " << endpoint;
-        if (incomingAudioChannels.contains(endpoint)) incomingAudioChannels.erase(endpoint);
+        if (hadChannel) {
+            incomingAudioChannels.erase(endpoint);
+            if (const auto sink = remoteAudioSink.lock()) sink->removeSource();
+        }
         pendingContent.erase(endpoint);
-        if (const auto sink = remoteAudioSink.lock()) sink->removeSource();
     }
 
     void NativeNetworkInterface::DtlsReadyToSend(const bool isReadyToSend) {
