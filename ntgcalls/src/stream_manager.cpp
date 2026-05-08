@@ -427,8 +427,11 @@ namespace ntgcalls {
                     strong->cancelSyncReaders.erase(id.second);
                     return;
                 }
-                if (const auto threadedReader = dynamic_cast<wrtc::SyncHelper*>(strong->readers[id.second].get())) {
-                    threadedReader->synchronizeTime();
+                // Use find() instead of operator[] to avoid silently inserting an empty entry if the reader was concurrently removed.
+                if (const auto it = strong->readers.find(id.second); it != strong->readers.end()) {
+                    if (const auto threadedReader = dynamic_cast<wrtc::SyncHelper*>(it->second.get())) {
+                        threadedReader->synchronizeTime();
+                    }
                 }
             }
             if (strong->streams.contains(id)) {

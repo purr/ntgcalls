@@ -40,9 +40,12 @@ namespace wrtc {
         std::vector<webrtc::Codec> codecs;
         const ::wrtc::PayloadType* selected = nullptr;
         for (const auto& pt : mediaContent.payloadTypes) {
-            if (pt.name == "opus" || pt.name == "OPUS") {
-                selected = &pt;
-                break;
+            if (pt.name.size() == 4) {
+                const auto& s = pt.name;
+                if ((s[0] | 0x20) == 'o' && (s[1] | 0x20) == 'p' && (s[2] | 0x20) == 'u' && (s[3] | 0x20) == 's') {
+                    selected = &pt;
+                    break;
+                }
             }
         }
         if (!selected && !mediaContent.payloadTypes.empty()) {
