@@ -4,38 +4,56 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
-      build-shared-libs:
-        description: 'Build shared libraries'
-        required: false
-        default: true
-        type: boolean
-      build-static-libs:
-        description: 'Build static libraries'
-        required: false
-        default: true
-        type: boolean
+      # ---- WHAT to build ------------------------------------------
+      # Defaults tuned for fastest dev iteration: build a single
+      # Windows wheel for one Python version, no tests, no libs, no
+      # publish.  Flip the boxes below for a real release.
       build-wheels:
-        description: 'Build wheels'
+        description: 'Build wheels (recommended)'
+        required: false
+        default: true
+        type: boolean
+      python-versions:
+        description: 'Python tag(s) to build — e.g. cp313 (single, fast) or cp3* (all 3.10-3.14)'
+        required: false
+        default: 'cp313'
+        type: string
+      run-tests:
+        description: 'Run wheel tests (slow; enable for release)'
         required: false
         default: false
         type: boolean
-      linux-build:
-        description: 'Build for Linux'
+      build-shared-libs:
+        description: 'Build shared libraries (not needed for Python; slow)'
+        required: false
+        default: false
+        type: boolean
+      build-static-libs:
+        description: 'Build static libraries (not needed for Python; slow)'
+        required: false
+        default: false
+        type: boolean
+      # ---- WHERE to build -----------------------------------------
+      # Default = Windows only.  Most local-dev iterations only need
+      # one platform.  Re-enable the others manually for a full
+      # release matrix.
+      windows-build:
+        description: 'Build for Windows'
         required: false
         default: true
+        type: boolean
+      linux-build:
+        description: 'Build for Linux x86_64'
+        required: false
+        default: false
         type: boolean
       linux-arm64-build:
         description: 'Build for Linux ARM64'
         required: false
-        default: true
+        default: false
         type: boolean
       macos-build:
         description: 'Build for macOS'
-        required: false
-        default: false
-        type: boolean
-      windows-build:
-        description: 'Build for Windows'
         required: false
         default: false
         type: boolean
@@ -45,9 +63,9 @@ on:
         default: false
         type: boolean
       publish:
-        description: 'Publish the library'
+        description: 'Publish the library (only for real releases)'
         required: false
-        default: true
+        default: false
         type: boolean
 jobs:
   setup:
@@ -163,9 +181,16 @@ jobs:
         env:
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.10"
-          CIBW_BUILD: cp3*-${{ matrix.cibw_os_build }}*
+          # ``python-versions`` from workflow_dispatch input — default
+          # ``cp313`` (single) which builds ONE wheel and finishes in
+          # ~10 min; ``cp3*`` builds for every supported CPython
+          # version (5x slower).
+          CIBW_BUILD: ${{ github.event.inputs.python-versions }}-${{ matrix.cibw_os_build }}*
           CIBW_SKIP: cp314t-*
-          CIBW_TEST_COMMAND: python -m unittest discover -s {package}/tests
+          # Empty CIBW_TEST_COMMAND skips the test suite entirely.
+          # Toggle ``run-tests`` to ``true`` only when prepping a
+          # release; tests add ~5-10 min per wheel.
+          CIBW_TEST_COMMAND: ${{ github.event.inputs.run-tests == 'true' && 'python -m unittest discover -s {package}/tests' || '' }}
           CIBW_MANYLINUX_AARCH64_IMAGE: ghcr.io/pytgcalls/ntgcalls/manylinux-arm64:latest
           CIBW_MANYLINUX_X86_64_IMAGE: ghcr.io/pytgcalls/ntgcalls/manylinux-x86_64:latest
           CIBW_MUSLLINUX_X86_64_IMAGE: ghcr.io/pytgcalls/ntgcalls/musllinux-x86_64:latest
