@@ -72,19 +72,49 @@ namespace wrtc {
         // Drop pending frame for this ssrc and capture the notifier under
         // the lock; invoke the notifier OUTSIDE the lock so a consumer
         // that needs to take its own mutex can't deadlock against us.
+        // ``ssrcInflight`` is incremented under ``mutex`` (paired with
+        // notify capture) so a concurrent ``onSsrcRemoved`` clear can
+        // observe and wait for us — see ``onSsrcRemoved`` for the drain
+        // pattern.  Without this, a destructor that clears the callback
+        // and then frees state captured by the previous callback could
+        // race against an in-flight notifier copy → use-after-free.
         std::function<void(uint32_t)> notify;
         {
             std::lock_guard lock(mutex);
             latestBySsrc.erase(ssrc);
             notify = ssrcRemovedCallback;
+            if (notify) {
+                ssrcInflight.fetch_add(1, std::memory_order_acq_rel);
+            }
         }
         if (notify) {
-            notify(ssrc);
+            try {
+                notify(ssrc);
+            } catch (...) {
+                // Swallow consumer exceptions; we MUST still decrement
+                // the in-flight counter so any waiter on ``drainCv`` is
+                // released, otherwise ``onSsrcRemoved`` deadlocks.
+            }
+            if (ssrcInflight.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                std::lock_guard cv_lk(drainMutex);
+                drainCv.notify_all();
+            }
         }
     }
 
     void RemoteAudioSink::onSsrcRemoved(std::function<void(uint32_t)> callback) {
-        std::lock_guard lock(mutex);
-        ssrcRemovedCallback = std::move(callback);
+        // Replace the callback atomically.  Then wait for any in-flight
+        // notifier (which captured the PREVIOUS callback by value) to
+        // finish before returning, so the caller can safely destroy any
+        // state the previous callback's ``[this]`` capture pointed at.
+        // No-op fast path when no callbacks are in flight.
+        {
+            std::lock_guard lock(mutex);
+            ssrcRemovedCallback = std::move(callback);
+        }
+        std::unique_lock cv_lk(drainMutex);
+        drainCv.wait(cv_lk, [this] {
+            return ssrcInflight.load(std::memory_order_acquire) == 0;
+        });
     }
 } // wrtc

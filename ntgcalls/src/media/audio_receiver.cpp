@@ -12,17 +12,19 @@ namespace ntgcalls {
     AudioReceiver::AudioReceiver() = default;
 
     AudioReceiver::~AudioReceiver() {
-        std::lock_guard lock(mutex);
-        // Detach the per-SSRC removal lambda we registered in open() so
-        // a still-alive sink (held elsewhere via a shared_ptr) cannot
-        // fire the [this]-capturing callback into a destroyed receiver.
-        // Today AudioReceiver outlives the sink (sink is the local
-        // shared_ptr cleared on the next line), but resetting the
-        // notifier first makes the invariant explicit and survives
-        // future lifetime changes.
+        // Drain any in-flight per-SSRC notifier BEFORE we touch state
+        // they could be reading.  ``onSsrcRemoved({})`` clears the
+        // registered callback then blocks on RemoteAudioSink's drain
+        // condvar until ``ssrcInflight == 0`` — guaranteeing no surviving
+        // stack-local notifier copy still holds a [this] capture into
+        // *this when we proceed.  Must happen WITHOUT our own mutex
+        // held: an in-flight notifier acquires ``mutex`` to call
+        // ``removeSsrc``, so taking the lock here would deadlock the
+        // drain.
         if (sink) {
             sink->onSsrcRemoved({});
         }
+        std::lock_guard lock(mutex);
         sink = nullptr;
         resamplers.clear();
         framesCallback = nullptr;

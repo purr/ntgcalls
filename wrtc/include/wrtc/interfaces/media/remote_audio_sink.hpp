@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -34,6 +35,20 @@ namespace wrtc {
         // separately from framesCallback because it fires at channel
         // teardown, not at every frame ingest.
         std::function<void(uint32_t)> ssrcRemovedCallback;
+        // Drain bookkeeping for the per-SSRC notifier.  ``removeSsrc``
+        // captures the registered callback under ``mutex`` then fires it
+        // OUTSIDE the lock (so consumers may take their own mutex
+        // without deadlocking against ours).  That window is when a
+        // racing ``onSsrcRemoved({})`` clear from a destructor could
+        // otherwise leave a stack-local copy of the previous callback
+        // dangling — its ``[this]`` capture is no longer valid by the
+        // time it fires.  ``ssrcInflight`` counts in-flight notifier
+        // invocations; ``onSsrcRemoved`` waits on ``drainCv`` until
+        // the count drops to zero before returning, guaranteeing no
+        // surviving notifier copy can outlive the caller's state.
+        std::atomic<int> ssrcInflight{0};
+        std::mutex drainMutex;
+        std::condition_variable drainCv;
 
     public:
         explicit RemoteAudioSink(const std::function<void(const std::vector<std::unique_ptr<AudioFrame>>&)>& callback);

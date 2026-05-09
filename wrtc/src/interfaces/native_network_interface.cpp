@@ -428,6 +428,22 @@ namespace wrtc {
             strong->pendingContent.clear();
             strong->audioChannel = nullptr;
             strong->videoChannel = nullptr;
+            // Teardown each incoming audio channel through the same
+            // path as ``removeIncomingAudio``: pair the erase with
+            // sink->removeSource() + sink->removeSsrc(ssrc), so
+            // numSources stays in sync and the matching resampler
+            // entry in ntgcalls' AudioReceiver is freed.  A bare
+            // ``incomingAudioChannels.clear()`` would skip both,
+            // leaving stale resampler state if the receiver itself
+            // outlives the close (e.g. graph rebuild on transport
+            // restart).
+            if (const auto sink = strong->remoteAudioSink.lock()) {
+                for (const auto &[_endpoint, channel] : strong->incomingAudioChannels) {
+                    if (!channel) continue;
+                    sink->removeSource();
+                    sink->removeSsrc(channel->ssrc());
+                }
+            }
             strong->incomingAudioChannels.clear();
             strong->incomingVideoChannels.clear();
             strong->remoteAudioSink.reset();
