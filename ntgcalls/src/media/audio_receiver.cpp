@@ -13,6 +13,16 @@ namespace ntgcalls {
 
     AudioReceiver::~AudioReceiver() {
         std::lock_guard lock(mutex);
+        // Detach the per-SSRC removal lambda we registered in open() so
+        // a still-alive sink (held elsewhere via a shared_ptr) cannot
+        // fire the [this]-capturing callback into a destroyed receiver.
+        // Today AudioReceiver outlives the sink (sink is the local
+        // shared_ptr cleared on the next line), but resetting the
+        // notifier first makes the invariant explicit and survives
+        // future lifetime changes.
+        if (sink) {
+            sink->onSsrcRemoved({});
+        }
         sink = nullptr;
         resamplers.clear();
         framesCallback = nullptr;
@@ -97,6 +107,11 @@ namespace ntgcalls {
         framesCallback = callback;
     }
 
+    void AudioReceiver::removeSsrc(const uint32_t ssrc) {
+        std::lock_guard lock(mutex);
+        resamplers.erase(ssrc);
+    }
+
     void AudioReceiver::open() {
         sink = std::make_shared<wrtc::RemoteAudioSink>([this](const std::vector<std::unique_ptr<wrtc::AudioFrame>>& samples) {
             if (!description) {
@@ -132,6 +147,13 @@ namespace ntgcalls {
             (void) framesCallback(processedFrames);
         });
         weakSink = sink;
+        // Subscribe to per-SSRC teardown notifications from the sink so
+        // we can release the matching resampler the moment a channel
+        // goes away — keeps the resamplers map bounded over long calls
+        // and prevents an SSRC reuse from inheriting stale filter state.
+        sink->onSsrcRemoved([this](const uint32_t ssrc) {
+            removeSsrc(ssrc);
+        });
     }
 
     std::weak_ptr<wrtc::RemoteAudioSink> AudioReceiver::remoteSink() {

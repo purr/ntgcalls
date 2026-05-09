@@ -28,6 +28,12 @@ namespace wrtc {
         std::unordered_map<uint32_t, std::unique_ptr<AudioFrame>> latestBySsrc;
         std::chrono::steady_clock::time_point lastIngest;
         std::function<void(const std::vector<std::unique_ptr<AudioFrame>>&)> framesCallback;
+        // Optional notifier the consumer (ntgcalls' AudioReceiver) can
+        // register so it gets a chance to drop its own per-SSRC state
+        // (resampler entry, etc.) the moment a channel goes away.  Stored
+        // separately from framesCallback because it fires at channel
+        // teardown, not at every frame ingest.
+        std::function<void(uint32_t)> ssrcRemovedCallback;
 
     public:
         explicit RemoteAudioSink(const std::function<void(const std::vector<std::unique_ptr<AudioFrame>>&)>& callback);
@@ -41,6 +47,15 @@ namespace wrtc {
         void removeSource();
 
         void updateAudioSourceCount(int count);
+
+        // Drop any cached state for a specific SSRC and notify the
+        // registered consumer.  Call from the layer that owns the
+        // incoming audio channel when that channel is torn down.
+        void removeSsrc(uint32_t ssrc);
+
+        // Register the per-SSRC teardown notifier.  Replaces any
+        // previously-registered handler.  Pass {} to clear.
+        void onSsrcRemoved(std::function<void(uint32_t)> callback);
     };
 
 } // wrtc

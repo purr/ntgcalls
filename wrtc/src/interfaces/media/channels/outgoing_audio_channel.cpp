@@ -34,17 +34,22 @@ namespace wrtc {
             channel->SetRtpTransport(rtpTransport);
         });
         std::vector<webrtc::Codec> codecs;
+        // Match Opus case-insensitively — some servers advertise "Opus"
+        // or "OPUS" and a strict "opus" check would silently leave the
+        // outgoing channel codec-less, with no audio sent.  Mirror the
+        // case-insensitive ASCII comparison used on the incoming side.
         for (const auto &[id, name, clockrate, channels, feedbackTypes, parameters] : mediaContent.payloadTypes) {
-            if (name == "opus") {
-                webrtc::Codec codec = webrtc::CreateAudioCodec(static_cast<int>(id), name, static_cast<int>(clockrate), channels);
-                codec.SetParam(webrtc::kCodecParamUseInbandFec, 1);
-                codec.SetParam(webrtc::kCodecParamPTime, 60);
-                for (const auto &[type, subtype] : feedbackTypes) {
-                    codec.AddFeedbackParam(webrtc::FeedbackParam(type, subtype));
-                }
-                codecs.push_back(std::move(codec));
-                break;
+            if (name.size() != 4) continue;
+            if ((name[0] | 0x20) != 'o' || (name[1] | 0x20) != 'p' ||
+                (name[2] | 0x20) != 'u' || (name[3] | 0x20) != 's') continue;
+            webrtc::Codec codec = webrtc::CreateAudioCodec(static_cast<int>(id), name, static_cast<int>(clockrate), channels);
+            codec.SetParam(webrtc::kCodecParamUseInbandFec, 1);
+            codec.SetParam(webrtc::kCodecParamPTime, 60);
+            for (const auto &[type, subtype] : feedbackTypes) {
+                codec.AddFeedbackParam(webrtc::FeedbackParam(type, subtype));
             }
+            codecs.push_back(std::move(codec));
+            break;
         }
         const auto outgoingDescription = std::make_unique<webrtc::AudioContentDescription>();
         for (const auto &rtpExtension : mediaContent.rtpExtensions) {

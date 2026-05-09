@@ -38,6 +38,13 @@ namespace ntgcalls {
         void onFrames(const std::function<void(const std::map<uint32_t, std::pair<bytes::unique_binary, size_t>>&)>& callback);
 
         void open() override;
+
+        // Drop a single SSRC's per-source resampler state.  Called when
+        // the matching incoming-audio channel is torn down (participant
+        // left, channel evicted past the cap) so the resampler map
+        // doesn't grow unbounded over a long-running call and so a
+        // future SSRC reuse never inherits stale filter state.
+        void removeSsrc(uint32_t ssrc);
     };
 
 } // ntgcalls

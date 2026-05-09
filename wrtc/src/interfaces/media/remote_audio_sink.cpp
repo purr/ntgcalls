@@ -67,4 +67,24 @@ namespace wrtc {
     void RemoteAudioSink::updateAudioSourceCount(const int count) {
         numSources = count < 0 ? 0 : static_cast<uint32_t>(count);
     }
+
+    void RemoteAudioSink::removeSsrc(const uint32_t ssrc) {
+        // Drop pending frame for this ssrc and capture the notifier under
+        // the lock; invoke the notifier OUTSIDE the lock so a consumer
+        // that needs to take its own mutex can't deadlock against us.
+        std::function<void(uint32_t)> notify;
+        {
+            std::lock_guard lock(mutex);
+            latestBySsrc.erase(ssrc);
+            notify = ssrcRemovedCallback;
+        }
+        if (notify) {
+            notify(ssrc);
+        }
+    }
+
+    void RemoteAudioSink::onSsrcRemoved(std::function<void(uint32_t)> callback) {
+        std::lock_guard lock(mutex);
+        ssrcRemovedCallback = std::move(callback);
+    }
 } // wrtc
