@@ -74,9 +74,10 @@ namespace wrtc {
                 media.audioPayloadTypes = parsePayloadTypes(audio);
                 media.audioRtpExtensions = parseRtpExtensions(audio);
             }
-            auto video = data["video"];
-            media.videoPayloadTypes = parsePayloadTypes(video);
-            media.videoRtpExtensions = parseRtpExtensions(video);
+            if (auto video = data["video"]; !video.is_null()) {
+                media.videoPayloadTypes = parsePayloadTypes(video);
+                media.videoRtpExtensions = parseRtpExtensions(video);
+            }
         } catch (json::exception& e) {
             RTC_LOG(LS_ERROR) << "Invalid JSON: " << e.what();
             throw TransportParseException("Invalid JSON: " + std::string(e.what()));

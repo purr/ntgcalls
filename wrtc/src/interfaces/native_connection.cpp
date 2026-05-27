@@ -257,17 +257,39 @@ namespace wrtc {
         for (const auto &content : coordinatedState->incomingContents) {
             remoteChannels.insert(content.ssrc);
         }
-        auto removeChannel = [&](auto &channels) {
-            std::erase_if(channels, [&](const auto &entry) {
-                if (const uint32_t ssrc = entry.second->ssrc(); !remoteChannels.contains(ssrc)) {
-                    pendingContent.erase(entry.first);
-                    return true;
+        // Audio teardown must mirror NativeNetworkInterface::removeIncomingAudio:
+        // pair the channel erase with sink->removeSource() (so numSources
+        // stays in sync with the actual subscription count, otherwise
+        // RemoteAudioSink's batch-flush threshold drifts and produces
+        // half-pitch artifacts) AND sink->removeSsrc(ssrc) (so the
+        // matching resampler entry is freed and a future SSRC reuse
+        // never inherits stale filter state).  Pure std::erase_if would
+        // skip both notifications.
+        {
+            std::vector<std::pair<std::string, uint32_t>> audioToErase;
+            for (const auto &entry : incomingAudioChannels) {
+                const uint32_t ssrc = entry.second->ssrc();
+                if (!remoteChannels.contains(ssrc)) {
+                    audioToErase.emplace_back(entry.first, ssrc);
                 }
-                return false;
-            });
-        };
-        removeChannel(incomingAudioChannels);
-        removeChannel(incomingVideoChannels);
+            }
+            for (const auto &[endpoint, ssrc] : audioToErase) {
+                pendingContent.erase(endpoint);
+                incomingAudioChannels.erase(endpoint);
+                if (const auto sink = remoteAudioSink.lock()) {
+                    sink->removeSource();
+                    sink->removeSsrc(ssrc);
+                }
+            }
+        }
+        // Video has no analogous per-SSRC sink state; pure erase is safe.
+        std::erase_if(incomingVideoChannels, [&](const auto &entry) {
+            if (const uint32_t ssrc = entry.second->ssrc(); !remoteChannels.contains(ssrc)) {
+                pendingContent.erase(entry.first);
+                return true;
+            }
+            return false;
+        });
         for (const auto &content : coordinatedState->incomingContents) {
             addIncomingSmartSource(std::to_string(content.ssrc), content);
         }

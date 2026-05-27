@@ -192,13 +192,29 @@ namespace wrtc {
     }
 
     void NativeNetworkInterface::removeIncomingAudio(const std::string& endpoint) {
-        if (!pendingContent.contains(endpoint)) {
+        // addSource() pairs with the channel, not pendingContent (which can be skipped past the 10-channel cap) — leaks here drift numSources and corrupt RemoteAudioSink's flush threshold.
+        const bool hadChannel = incomingAudioChannels.contains(endpoint);
+        if (!hadChannel && !pendingContent.contains(endpoint)) {
             return;
         }
         RTC_LOG(LS_INFO) << "Removing incoming audio channel with ssrc " << endpoint;
-        if (incomingAudioChannels.contains(endpoint)) incomingAudioChannels.erase(endpoint);
+        if (hadChannel) {
+            // Capture the ssrc BEFORE we erase the channel — the unique_ptr
+            // owns the channel and its ssrc accessor goes away on erase.
+            const auto channelSsrc = incomingAudioChannels[endpoint]->ssrc();
+            incomingAudioChannels.erase(endpoint);
+            if (const auto sink = remoteAudioSink.lock()) {
+                sink->removeSource();
+                // Tell the sink this ssrc is gone.  The sink drops its
+                // own latestBySsrc cache entry and forwards to ntgcalls'
+                // AudioReceiver so the matching resampler can be freed.
+                // Without this, resampler entries accumulate over a long
+                // call with high participant churn and any SSRC reuse
+                // would inherit stale filter state.
+                sink->removeSsrc(channelSsrc);
+            }
+        }
         pendingContent.erase(endpoint);
-        if (const auto sink = remoteAudioSink.lock()) sink->removeSource();
     }
 
     void NativeNetworkInterface::DtlsReadyToSend(const bool isReadyToSend) {
@@ -348,6 +364,14 @@ namespace wrtc {
                 }
             } else {
                 std::lock_guard lock(strong->mutex);
+                // Pair every channel removal with sink->removeSource() and removeSsrc(): a plain map.clear() leaks numSources and resampler state, which the next enableAudioIncoming(true) inherits and translates back into half-pitch mixing.
+                const auto sink = strong->remoteAudioSink.lock();
+                for (const auto& [endpoint, channel] : strong->incomingAudioChannels) {
+                    if (sink) {
+                        sink->removeSource();
+                        sink->removeSsrc(channel->ssrc());
+                    }
+                }
                 strong->incomingAudioChannels.clear();
             }
         });
@@ -404,6 +428,22 @@ namespace wrtc {
             strong->pendingContent.clear();
             strong->audioChannel = nullptr;
             strong->videoChannel = nullptr;
+            // Teardown each incoming audio channel through the same
+            // path as ``removeIncomingAudio``: pair the erase with
+            // sink->removeSource() + sink->removeSsrc(ssrc), so
+            // numSources stays in sync and the matching resampler
+            // entry in ntgcalls' AudioReceiver is freed.  A bare
+            // ``incomingAudioChannels.clear()`` would skip both,
+            // leaving stale resampler state if the receiver itself
+            // outlives the close (e.g. graph rebuild on transport
+            // restart).
+            if (const auto sink = strong->remoteAudioSink.lock()) {
+                for (const auto &[_endpoint, channel] : strong->incomingAudioChannels) {
+                    if (!channel) continue;
+                    sink->removeSource();
+                    sink->removeSsrc(channel->ssrc());
+                }
+            }
             strong->incomingAudioChannels.clear();
             strong->incomingVideoChannels.clear();
             strong->remoteAudioSink.reset();

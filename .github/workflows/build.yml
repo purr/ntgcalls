@@ -22,7 +22,17 @@ on:
       build-wheels:
         description: 'Build wheels'
         required: false
-        default: false
+        default: true
+        type: boolean
+      python-versions:
+        description: 'CIBW python tag filter — cp3* (all 3.10-3.14) or a single tag like cp313 for faster dev iteration'
+        required: false
+        default: 'cp3*'
+        type: string
+      run-tests:
+        description: 'Run wheel tests after build (disable for faster dev iteration)'
+        required: false
+        default: true
         type: boolean
       linux-build:
         description: 'Build for Linux'
@@ -153,8 +163,8 @@ jobs:
           python-path: ${{ steps.python.outputs.path }}
         env:
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.10"
-          CIBW_BUILD: cp3*-${{ matrix.cibw_os_build }}*
-          CIBW_TEST_COMMAND: python -m unittest discover -s {package}/tests
+          CIBW_BUILD: ${{ github.event.inputs.python-versions }}-${{ matrix.cibw_os_build }}*
+          CIBW_TEST_COMMAND: ${{ github.event.inputs.run-tests == 'true' && 'python -m unittest discover -s {package}/tests' || '' }}
           CIBW_MANYLINUX_AARCH64_IMAGE: ghcr.io/pytgcalls/ntgcalls/manylinux-arm64:latest
           CIBW_MANYLINUX_X86_64_IMAGE: ghcr.io/pytgcalls/ntgcalls/manylinux-x86_64:latest
           CIBW_MUSLLINUX_X86_64_IMAGE: ghcr.io/pytgcalls/ntgcalls/musllinux-x86_64:latest

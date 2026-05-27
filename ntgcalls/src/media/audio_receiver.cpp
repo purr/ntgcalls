@@ -2,23 +2,43 @@
 // Created by Laky64 on 07/10/24.
 //
 
+#include <algorithm>
+#include <cstring>
 #include <ntgcalls/media/audio_receiver.hpp>
 #include <ntgcalls/exceptions.hpp>
 #include <rtc_base/logging.h>
 
 namespace ntgcalls {
-    AudioReceiver::AudioReceiver() {
-        resampler = std::make_unique<webrtc::Resampler>();
-    }
+    AudioReceiver::AudioReceiver() = default;
 
     AudioReceiver::~AudioReceiver() {
+        // Drain any in-flight per-SSRC notifier BEFORE we touch state
+        // they could be reading.  ``onSsrcRemoved({})`` clears the
+        // registered callback then blocks on RemoteAudioSink's drain
+        // condvar until ``ssrcInflight == 0`` — guaranteeing no surviving
+        // stack-local notifier copy still holds a [this] capture into
+        // *this when we proceed.  Must happen WITHOUT our own mutex
+        // held: an in-flight notifier acquires ``mutex`` to call
+        // ``removeSsrc``, so taking the lock here would deadlock the
+        // drain.
+        if (sink) {
+            sink->onSsrcRemoved({});
+        }
         std::lock_guard lock(mutex);
         sink = nullptr;
-        resampler = nullptr;
+        resamplers.clear();
         framesCallback = nullptr;
     }
 
-    bytes::unique_binary AudioReceiver::resampleFrame(bytes::unique_binary data, const size_t size, const uint8_t channels, const uint16_t sampleRate) {
+    webrtc::Resampler* AudioReceiver::resamplerFor(const uint32_t ssrc) {
+        auto& slot = resamplers[ssrc];
+        if (!slot) {
+            slot = std::make_unique<webrtc::Resampler>();
+        }
+        return slot.get();
+    }
+
+    bytes::unique_binary AudioReceiver::resampleFrame(bytes::unique_binary data, const size_t size, const uint8_t channels, const uint16_t sampleRate, const uint32_t ssrc) {
         bytes::unique_binary convertedData;
         size_t preSampleSize;
         if (channels != description->channelCount) {
@@ -39,9 +59,12 @@ namespace ntgcalls {
         }
         const size_t newSize = frameSize();
         auto newFrame = bytes::make_unique_binary(newSize);
+        std::memset(newFrame.get(), 0, newSize);
         if (description->sampleRate == sampleRate) {
-            memcpy(newFrame.get(), convertedData.get(), preSampleSize);
+            const size_t copyBytes = std::min(preSampleSize, newSize);
+            memcpy(newFrame.get(), convertedData.get(), copyBytes);
         } else {
+            const auto resampler = resamplerFor(ssrc);
             resampler->ResetIfNeeded(sampleRate, static_cast<int>(description->sampleRate), description->channelCount);
             size_t newFrameSize = 0;
             const auto resampled = resampler->Push(
@@ -86,6 +109,11 @@ namespace ntgcalls {
         framesCallback = callback;
     }
 
+    void AudioReceiver::removeSsrc(const uint32_t ssrc) {
+        std::lock_guard lock(mutex);
+        resamplers.erase(ssrc);
+    }
+
     void AudioReceiver::open() {
         sink = std::make_shared<wrtc::RemoteAudioSink>([this](const std::vector<std::unique_ptr<wrtc::AudioFrame>>& samples) {
             if (!description) {
@@ -99,7 +127,7 @@ namespace ntgcalls {
             for (const auto& frame: samples) {
                 try {
                     bytes::unique_binary data = bytes::make_unique_binary(frame->size);
-                    memcpy(data.get(), frame->data, frame->size);
+                    memcpy(data.get(), frame->data.get(), frame->size);
                     processedFrames.emplace(
                         frame->ssrc,
                         std::pair{
@@ -107,7 +135,8 @@ namespace ntgcalls {
                                 std::move(data),
                                 frame->size,
                                 frame->channels,
-                                frame->sampleRate
+                                frame->sampleRate,
+                                frame->ssrc
                             ),
                             frameSize()
                         }
@@ -120,6 +149,13 @@ namespace ntgcalls {
             (void) framesCallback(processedFrames);
         });
         weakSink = sink;
+        // Subscribe to per-SSRC teardown notifications from the sink so
+        // we can release the matching resampler the moment a channel
+        // goes away — keeps the resamplers map bounded over long calls
+        // and prevents an SSRC reuse from inheriting stale filter state.
+        sink->onSsrcRemoved([this](const uint32_t ssrc) {
+            removeSsrc(ssrc);
+        });
     }
 
     std::weak_ptr<wrtc::RemoteAudioSink> AudioReceiver::remoteSink() {

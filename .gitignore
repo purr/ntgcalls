@@ -37,7 +37,7 @@ shared-output/
 static-output/
 dist/
 local_tests/
-__pycache__
+__pycache__/
 *.i420
 *.pcm
 *.mp4
