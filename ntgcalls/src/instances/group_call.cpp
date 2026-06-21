@@ -160,9 +160,14 @@ namespace ntgcalls {
         // upper bound — with an EMPTY onStageEndpoints list the allocator
         // never spends bandwidth promoting anyone above the bottom simulcast
         // layer, which is why a receiver gets parked at e.g. 92x160 even
-        // though it asked for 720.  Listing the endpoints on stage (and a
-        // non-zero defaultConstraints) tells the SFU to actually forward the
-        // high layer.
+        // though it asked for 720.  Listing the endpoints on stage is what
+        // tells the SFU to actually forward the high layer.  This mirrors the
+        // ReceiverVideoConstraints the official Telegram clients send
+        // (tgcalls maybeUpdateRemoteVideoConstraints, tweb): the same four
+        // keys, no selectedEndpoints, no lastN (absent lastN = unlimited).
+        // defaultConstraints stays maxHeight 0 — it applies only to endpoints
+        // NOT in the per-endpoint map, which a recorder never wants the SFU
+        // to forward (we are not sinking them).
         json constraints = json::object();
         json onStageEndpoints = json::array();
         for (const auto& endpoint : conn->getEndpoints()) {
@@ -175,7 +180,7 @@ namespace ntgcalls {
         json jsonRes = {
             {"colibriClass", "ReceiverVideoConstraints"},
             {"constraints", constraints},
-            {"defaultConstraints", {{"maxHeight", 720}}},
+            {"defaultConstraints", {{"maxHeight", 0}}},
             {"onStageEndpoints", onStageEndpoints}
         };
         conn->sendDataChannelMessage(bytes::make_binary(jsonRes.dump()));
@@ -196,7 +201,15 @@ namespace ntgcalls {
         if (!conn) {
             throw ConnectionError("Connection not initialized");
         }
-        return conn->removeIncomingVideo(endpoint);
+        const auto removed = conn->removeIncomingVideo(endpoint);
+        // Keep the on-stage list in sync: the removed endpoint is already gone
+        // from getEndpoints(), so re-sending drops it from onStageEndpoints
+        // instead of leaving the SFU forwarding a high layer for a stream we
+        // no longer sink.
+        if (removed && getConnectionMode() == wrtc::ConnectionMode::Rtc) {
+            updateRemoteVideoConstraints(conn);
+        }
+        return removed;
     }
 
     void GroupCall::stopPresentation(const bool force) {
