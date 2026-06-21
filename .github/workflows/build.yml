@@ -164,6 +164,9 @@ jobs:
         env:
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.10"
           CIBW_BUILD: ${{ github.event.inputs.python-versions }}-${{ matrix.cibw_os_build }}*
+          # Build 64-bit Windows only — 32-bit (win32) has no maintained
+          # webrtc toolchain here and is not needed.
+          CIBW_ARCHS_WINDOWS: AMD64
           CIBW_TEST_COMMAND: ${{ github.event.inputs.run-tests == 'true' && 'python -m unittest discover -s {package}/tests' || '' }}
           CIBW_MANYLINUX_AARCH64_IMAGE: ghcr.io/pytgcalls/ntgcalls/manylinux-arm64:latest
           CIBW_MANYLINUX_X86_64_IMAGE: ghcr.io/pytgcalls/ntgcalls/manylinux-x86_64:latest
