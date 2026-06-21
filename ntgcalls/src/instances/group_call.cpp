@@ -155,18 +155,29 @@ namespace ntgcalls {
     }
 
     void GroupCall::updateRemoteVideoConstraints(const wrtc::GroupConnection* conn) {
-        json jsonRes = {
-            {"colibriClass", "ReceiverVideoConstraints"},
-            {"constraints", json::object()},
-            {"defaultConstraints", {{"maxHeight", 0}}},
-            {"onStageEndpoints", json::array()}
-        };
+        // Pin every subscribed video endpoint "on stage".  In the Jitsi /
+        // Colibri bandwidth allocator a per-endpoint maxHeight is only an
+        // upper bound — with an EMPTY onStageEndpoints list the allocator
+        // never spends bandwidth promoting anyone above the bottom simulcast
+        // layer, which is why a receiver gets parked at e.g. 92x160 even
+        // though it asked for 720.  Listing the endpoints on stage (and a
+        // non-zero defaultConstraints) tells the SFU to actually forward the
+        // high layer.
+        json constraints = json::object();
+        json onStageEndpoints = json::array();
         for (const auto& endpoint : conn->getEndpoints()) {
-            jsonRes["constraints"][endpoint] = {
+            constraints[endpoint] = {
                 {"maxHeight", 720},
                 {"minHeight", 180},
             };
+            onStageEndpoints.push_back(endpoint);
         }
+        json jsonRes = {
+            {"colibriClass", "ReceiverVideoConstraints"},
+            {"constraints", constraints},
+            {"defaultConstraints", {{"maxHeight", 720}}},
+            {"onStageEndpoints", onStageEndpoints}
+        };
         conn->sendDataChannelMessage(bytes::make_binary(jsonRes.dump()));
     }
 
