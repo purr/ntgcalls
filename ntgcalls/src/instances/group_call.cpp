@@ -171,13 +171,22 @@ namespace ntgcalls {
         std::weak_ptr weak(shared_from_this());
         updateThread.PostDelayedTask([weak] {
             const auto strong = std::static_pointer_cast<GroupCall>(weak.lock());
-            if (!strong || !strong->connection) {
+            if (!strong) {
                 return;
             }
-            if (strong->getConnectionMode() == wrtc::ConnectionMode::Rtc) {
-                updateRemoteVideoConstraints(Safe<wrtc::GroupConnection>(strong->connection));
-                if (strong->presentationConnection) {
-                    updateRemoteVideoConstraints(Safe<wrtc::GroupConnection>(strong->presentationConnection));
+            // Copy the shared_ptrs: stop() / stopPresentation() may null the
+            // members from another thread between our check and use, and
+            // Safe<> THROWS on null — an uncaught throw inside a posted task
+            // terminates the process.  The local copies keep the objects
+            // alive across the send.
+            const auto conn = strong->connection;
+            if (!conn) {
+                return;
+            }
+            if (conn->getConnectionMode() == wrtc::ConnectionMode::Rtc) {
+                updateRemoteVideoConstraints(Safe<wrtc::GroupConnection>(conn));
+                if (const auto pres = strong->presentationConnection) {
+                    updateRemoteVideoConstraints(Safe<wrtc::GroupConnection>(pres));
                 }
             }
             strong->beginRemoteConstraintsTimer();
