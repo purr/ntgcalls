@@ -14,8 +14,11 @@ namespace ntgcalls {
         std::shared_ptr<wrtc::GroupConnection> presentationConnection;
         wrtc::synchronized_callback<void> broadcastTimestampCallback;
         wrtc::synchronized_callback<wrtc::SegmentPartRequest> segmentPartRequestCallback;
+        bool constraintsTimerStarted = false;
 
         static void updateRemoteVideoConstraints(const wrtc::GroupConnection* conn) ;
+
+        void beginRemoteConstraintsTimer();
 
     public:
         explicit GroupCall(wrtc::SafeThread& updateThread): CallInterface(updateThread) {}

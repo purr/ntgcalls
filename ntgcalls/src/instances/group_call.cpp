@@ -152,6 +152,36 @@ namespace ntgcalls {
             conn,
             isPresentation ? NetworkInfo::Kind::Presentation : NetworkInfo::Kind::Normal
         );
+        if (!isPresentation && connectionMode == wrtc::ConnectionMode::Rtc && !constraintsTimerStarted) {
+            constraintsTimerStarted = true;
+            beginRemoteConstraintsTimer();
+        }
+    }
+
+    void GroupCall::beginRemoteConstraintsTimer() {
+        // Official clients re-send ReceiverVideoConstraints every 5 s for the
+        // whole call lifetime (tgcalls GroupInstanceCustomImpl::
+        // beginRemoteConstraintsUpdateTimer(5000), re-armed unconditionally).
+        // Event-driven sends alone are not enough: a message sent before the
+        // data channel finished opening is lost, and the SFU re-runs its
+        // bandwidth allocation mid-call (congestion, publishers joining) —
+        // either leaves this receiver pinned to the bottom simulcast layer
+        // until the next add/remove happens to fire.  The periodic refresh is
+        // what makes the official clients self-heal within 5 s; mirror it.
+        std::weak_ptr weak(shared_from_this());
+        updateThread.PostDelayedTask([weak] {
+            const auto strong = std::static_pointer_cast<GroupCall>(weak.lock());
+            if (!strong || !strong->connection) {
+                return;
+            }
+            if (strong->getConnectionMode() == wrtc::ConnectionMode::Rtc) {
+                updateRemoteVideoConstraints(Safe<wrtc::GroupConnection>(strong->connection));
+                if (strong->presentationConnection) {
+                    updateRemoteVideoConstraints(Safe<wrtc::GroupConnection>(strong->presentationConnection));
+                }
+            }
+            strong->beginRemoteConstraintsTimer();
+        }, webrtc::TimeDelta::Seconds(5));
     }
 
     void GroupCall::updateRemoteVideoConstraints(const wrtc::GroupConnection* conn) {
