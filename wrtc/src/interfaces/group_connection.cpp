@@ -217,7 +217,12 @@ namespace wrtc {
                 if (const auto audioSink = remoteAudioSink.lock()) {
                     audioSink->updateAudioSourceCount(0);
                 }
-                remoteScreenCastSink.reset();
+                // remoteScreenCastSink must survive the migration like
+                // remoteVideoSink/remoteAudioSink do: it targets the
+                // StreamManager-owned receiver, is registered only once in
+                // GroupCall::init(), and every RTC screencast channel created
+                // after this point copies it — resetting it here silently
+                // dropped all post-upgrade screen-share frames.
             }
             networkThread().PostTask([weak] {
                 const auto strong = std::static_pointer_cast<GroupConnection>(weak.lock());
