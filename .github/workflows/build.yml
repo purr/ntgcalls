@@ -62,7 +62,7 @@ on:
       publish:
         description: 'Publish the library'
         required: false
-        default: true
+        default: false
         type: boolean
 jobs:
   setup:
@@ -127,8 +127,16 @@ jobs:
 
       - name: Install Python Requirements
         run: |
-          "${{ steps.python.outputs.path }}" -m pip install setuptools
+          "${{ steps.python.outputs.path }}" -m pip install "git+https://github.com/pytgcalls/cibuildwheel.git" setuptools
         shell: bash
+
+      - name: Install Media Foundation
+        if: startsWith(matrix.shared_name, 'windows')
+        run: |
+          if ((Get-WindowsFeature Server-Media-Foundation).InstallState -ne 'Installed') {
+            Install-WindowsFeature Server-Media-Foundation
+          }
+        shell: powershell
 
       - name: Build Shared Libs
         if: github.event.inputs.build-shared-libs == 'true'
@@ -157,10 +165,8 @@ jobs:
           if-no-files-found: error
 
       - name: Build wheels
-        uses: ./.github/cibuildwheel
+        run: ${{ steps.python.outputs.path }} -m cibuildwheel --output-dir wheelhouse
         if: github.event.inputs.build-wheels == 'true'
-        with:
-          python-path: ${{ steps.python.outputs.path }}
         env:
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.10"
           CIBW_BUILD: ${{ github.event.inputs.python-versions }}-${{ matrix.cibw_os_build }}*
@@ -168,9 +174,9 @@ jobs:
           # webrtc toolchain here and is not needed.
           CIBW_ARCHS_WINDOWS: AMD64
           CIBW_TEST_COMMAND: ${{ github.event.inputs.run-tests == 'true' && 'python -m unittest discover -s {package}/tests' || '' }}
-          CIBW_MANYLINUX_AARCH64_IMAGE: ghcr.io/pytgcalls/ntgcalls/manylinux-arm64:latest
-          CIBW_MANYLINUX_X86_64_IMAGE: ghcr.io/pytgcalls/ntgcalls/manylinux-x86_64:latest
-          CIBW_MUSLLINUX_X86_64_IMAGE: ghcr.io/pytgcalls/ntgcalls/musllinux-x86_64:latest
+          # Jobs already run inside the manylinux image on Linux; do not
+          # spawn nested Docker containers (that fails in ~3s with no docker).
+          CIBW_CONTAINER_ENGINE: none
           CIBW_ENVIRONMENT: "PYPI_TAGS=1"
           MACOSX_DEPLOYMENT_TARGET: 14.0
 
