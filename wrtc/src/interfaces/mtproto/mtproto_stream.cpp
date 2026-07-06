@@ -148,10 +148,16 @@ namespace wrtc {
             return;
         }
         std::lock_guard lock(segmentMutex);
+        // Full for camera too: official clients pass the app-requested
+        // quality through setRequestedVideoChannels and use Full when the
+        // video is on screen (tgcalls StreamingMediaContext, quality from
+        // VideoChannelDescription::maxQuality).  A recorder always wants the
+        // top transcode; Medium here permanently capped stream-mode camera
+        // video at the medium server transcode with no API to raise it.
         videoChannels[endpoint] = VideoChannel(
             ssrc,
             isScreenCast,
-            isScreenCast ? MediaSegment::Quality::Full : MediaSegment::Quality::Medium
+            MediaSegment::Quality::Full
         );
         checkPendingVideoQualityUpdate();
     }
