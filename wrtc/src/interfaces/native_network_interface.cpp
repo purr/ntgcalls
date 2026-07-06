@@ -179,14 +179,23 @@ namespace wrtc {
         if (pendingContent.contains(endpoint)) {
             return;
         }
-        int audioChannelsCount = 0;
-        for (const auto& content : pendingContent | std::views::values) {
-            if (content.type == MediaContent::Type::Audio) {
-                audioChannelsCount++;
+        // The 10-entry cap mirrors the official audio-channel limit and must
+        // gate AUDIO inserts only.  Video must always land in pendingContent:
+        // getEndpoints() feeds ReceiverVideoConstraints, whose
+        // defaultConstraints is maxHeight 0 — a video endpoint kept out of
+        // this map is persistently reported to the SFU as "forward nothing"
+        // even though its IncomingVideoChannel exists.  Official tgcalls
+        // tracks video in a separate uncapped map for exactly this reason.
+        if (mediaContent.type == MediaContent::Type::Audio) {
+            int audioChannelsCount = 0;
+            for (const auto& content : pendingContent | std::views::values) {
+                if (content.type == MediaContent::Type::Audio) {
+                    audioChannelsCount++;
+                }
             }
-        }
-        if (audioChannelsCount >= 10) {
-            return;
+            if (audioChannelsCount >= 10) {
+                return;
+            }
         }
         pendingContent[endpoint] = mediaContent;
     }
