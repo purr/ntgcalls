@@ -41,7 +41,21 @@ namespace ntgcalls {
                 return;
             }
             RTC_LOG(LS_VERBOSE) << "Data channel opened";
-            updateRemoteVideoConstraints(Safe<wrtc::GroupConnection>(strong->connection));
+            // This callback fires inline on the network thread, and
+            // getEndpoints() takes the connection mutex — a mutex other
+            // threads hold while issuing BlockingCalls INTO the network
+            // thread.  Sending inline would arm that deadlock, so marshal to
+            // the update thread (official tgcalls likewise confines
+            // maybeUpdateRemoteVideoConstraints to its media thread).
+            strong->updateThread.PostTask([weak] {
+                const auto strongUpdate = std::static_pointer_cast<GroupCall>(weak.lock());
+                if (!strongUpdate) {
+                    return;
+                }
+                if (const auto conn = strongUpdate->connection) {
+                    updateRemoteVideoConstraints(Safe<wrtc::GroupConnection>(conn));
+                }
+            });
         });
         streamManager->addTrack(StreamManager::Mode::Capture, StreamManager::Device::Microphone, connection.get());
         streamManager->addTrack(StreamManager::Mode::Capture, StreamManager::Device::Camera, connection.get());
@@ -72,7 +86,17 @@ namespace ntgcalls {
                 return;
             }
             RTC_LOG(LS_VERBOSE) << "Data channel opened";
-            updateRemoteVideoConstraints(Safe<wrtc::GroupConnection>(strong->presentationConnection));
+            // Same marshaling as the main connection: never take the
+            // connection mutex on the network thread.
+            strong->updateThread.PostTask([weak] {
+                const auto strongUpdate = std::static_pointer_cast<GroupCall>(weak.lock());
+                if (!strongUpdate) {
+                    return;
+                }
+                if (const auto pres = strongUpdate->presentationConnection) {
+                    updateRemoteVideoConstraints(Safe<wrtc::GroupConnection>(pres));
+                }
+            });
         });
         streamManager->addTrack(StreamManager::Mode::Capture, StreamManager::Device::Speaker, presentationConnection.get());
         streamManager->addTrack(StreamManager::Mode::Capture, StreamManager::Device::Screen, presentationConnection.get());

@@ -340,6 +340,10 @@ namespace wrtc {
     }
 
     std::vector<std::string> NativeNetworkInterface::getEndpoints() const {
+        // Writers mutate pendingContent under this mutex on the worker /
+        // caller threads; this runs on the update thread (5s constraints
+        // timer) and must not iterate the map unlocked.
+        std::lock_guard lock(mutex);
         std::vector<std::string> endpoints;
         for (const auto &[endpoint, media] : pendingContent) {
             if (media.type == MediaContent::Type::Video) {
@@ -366,22 +370,38 @@ namespace wrtc {
                 return;
             }
             if (enable) {
-                for (const auto& [endpoint, mediaContent] : strong->pendingContent) {
-                    if (mediaContent.type == MediaContent::Type::Audio) {
-                        strong->addIncomingSmartSource(endpoint, mediaContent, true);
+                // Copy the matching entries under the lock, then re-add
+                // outside it: addIncomingSmartSource re-locks internally, and
+                // iterating pendingContent unlocked races writers on other
+                // threads.
+                std::vector<std::pair<std::string, MediaContent>> toAdd;
+                {
+                    std::lock_guard lock(strong->mutex);
+                    for (const auto& [endpoint, mediaContent] : strong->pendingContent) {
+                        if (mediaContent.type == MediaContent::Type::Audio) {
+                            toAdd.emplace_back(endpoint, mediaContent);
+                        }
                     }
+                }
+                for (const auto& [endpoint, mediaContent] : toAdd) {
+                    strong->addIncomingSmartSource(endpoint, mediaContent, true);
                 }
             } else {
-                std::lock_guard lock(strong->mutex);
-                // Pair every channel removal with sink->removeSource() and removeSsrc(): a plain map.clear() leaks numSources and resampler state, which the next enableAudioIncoming(true) inherits and translates back into half-pitch mixing.
-                const auto sink = strong->remoteAudioSink.lock();
-                for (const auto& [endpoint, channel] : strong->incomingAudioChannels) {
-                    if (sink) {
-                        sink->removeSource();
-                        sink->removeSsrc(channel->ssrc());
+                std::map<std::string, std::unique_ptr<IncomingAudioChannel>> removed;
+                {
+                    std::lock_guard lock(strong->mutex);
+                    // Pair every channel removal with sink->removeSource() and removeSsrc(): a plain map.clear() leaks numSources and resampler state, which the next enableAudioIncoming(true) inherits and translates back into half-pitch mixing.
+                    const auto sink = strong->remoteAudioSink.lock();
+                    for (const auto& [endpoint, channel] : strong->incomingAudioChannels) {
+                        if (sink) {
+                            sink->removeSource();
+                            sink->removeSsrc(channel->ssrc());
+                        }
                     }
+                    // Destroy the channels after releasing the lock — their
+                    // destructors block on the network thread.
+                    removed.swap(strong->incomingAudioChannels);
                 }
-                strong->incomingAudioChannels.clear();
             }
         });
     }
@@ -404,15 +424,31 @@ namespace wrtc {
                 return;
             }
             if (enable) {
-                for (const auto& [endpoint, mediaContent] : strong->pendingContent) {
-                    if (mediaContent.type == MediaContent::Type::Video && mediaContent.isScreenCast() == isScreenCast) {
-                        strong->addIncomingSmartSource(endpoint, mediaContent, true);
+                std::vector<std::pair<std::string, MediaContent>> toAdd;
+                {
+                    std::lock_guard lock(strong->mutex);
+                    for (const auto& [endpoint, mediaContent] : strong->pendingContent) {
+                        if (mediaContent.type == MediaContent::Type::Video && mediaContent.isScreenCast() == isScreenCast) {
+                            toAdd.emplace_back(endpoint, mediaContent);
+                        }
                     }
                 }
+                for (const auto& [endpoint, mediaContent] : toAdd) {
+                    strong->addIncomingSmartSource(endpoint, mediaContent, true);
+                }
             } else {
-                for (const auto& [endpoint, mediaContent] : strong->pendingContent) {
-                    if (mediaContent.type == MediaContent::Type::Video && mediaContent.isScreenCast() == isScreenCast) {
-                        strong->incomingVideoChannels.erase(endpoint);
+                // Extract under the lock, destroy after release — channel
+                // destructors block on the network thread.
+                std::vector<std::unique_ptr<IncomingVideoChannel>> removed;
+                {
+                    std::lock_guard lock(strong->mutex);
+                    for (const auto& [endpoint, mediaContent] : strong->pendingContent) {
+                        if (mediaContent.type == MediaContent::Type::Video && mediaContent.isScreenCast() == isScreenCast) {
+                            if (const auto it = strong->incomingVideoChannels.find(endpoint); it != strong->incomingVideoChannels.end()) {
+                                removed.push_back(std::move(it->second));
+                                strong->incomingVideoChannels.erase(it);
+                            }
+                        }
                     }
                 }
             }
@@ -434,7 +470,13 @@ namespace wrtc {
             if (!strong) {
                 return;
             }
-            strong->pendingContent.clear();
+            {
+                // Same mutex as every other pendingContent writer — the 5s
+                // constraints timer iterates this map under it on the update
+                // thread while close() runs here on the worker.
+                std::lock_guard lock(strong->mutex);
+                strong->pendingContent.clear();
+            }
             strong->audioChannel = nullptr;
             strong->videoChannel = nullptr;
             // Teardown each incoming audio channel through the same

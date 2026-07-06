@@ -404,8 +404,11 @@ namespace wrtc {
     }
 
     uint32_t GroupConnection::addIncomingVideo(const std::string& endpoint, const std::vector<SsrcGroup>& ssrcGroups) {
-        if (pendingContent.contains(endpoint)) {
-            return 0;
+        {
+            std::lock_guard lock(mutex);
+            if (pendingContent.contains(endpoint)) {
+                return 0;
+            }
         }
         MediaContent mediaContent;
         mediaContent.type = MediaContent::Type::Video;
@@ -426,11 +429,23 @@ namespace wrtc {
         if (mtprotoStream) {
             return mtprotoStream->removeIncomingVideo(endpoint);
         }
-        if (!pendingContent.contains(endpoint)) {
-            return false;
+        std::unique_ptr<IncomingVideoChannel> removed;
+        {
+            // Take the channel out of both maps atomically so a concurrent
+            // re-add cannot interleave, but destroy it after the lock is
+            // released: ~IncomingVideoChannel blocks on the worker thread,
+            // which itself takes this mutex on the incoming-audio path —
+            // holding it across the destruction would deadlock.
+            std::lock_guard lock(mutex);
+            if (!pendingContent.contains(endpoint)) {
+                return false;
+            }
+            pendingContent.erase(endpoint);
+            if (const auto it = incomingVideoChannels.find(endpoint); it != incomingVideoChannels.end()) {
+                removed = std::move(it->second);
+                incomingVideoChannels.erase(it);
+            }
         }
-        if (incomingVideoChannels.contains(endpoint)) incomingVideoChannels.erase(endpoint);
-        pendingContent.erase(endpoint);
         return true;
     }
 
